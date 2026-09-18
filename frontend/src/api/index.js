@@ -1,4 +1,7 @@
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'
+// Nullish coalescing (not ||): an explicitly empty string means "same origin,
+// use relative paths" (production behind a single reverse proxy), which must
+// not fall back to the localhost default.
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
