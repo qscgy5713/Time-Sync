@@ -44,6 +44,13 @@
       </div>
 
       <div v-if="viewMode === 'fill'" class="rounded-2xl border border-gray-100 bg-white p-6 sm:p-8 shadow-sm shadow-gray-100">
+        <div v-if="myParticipantId != null" class="mb-5 flex items-center justify-between gap-3 rounded-lg bg-brand-50 px-4 py-2.5 text-xs text-brand-700">
+          <span>你先前已經填寫過，這裡會更新你原本的紀錄。</span>
+          <button type="button" class="shrink-0 font-semibold underline decoration-dotted hover:text-brand-800" @click="forgetIdentity">
+            不是你？改填新的
+          </button>
+        </div>
+
         <div class="mb-5">
           <label class="block text-sm font-semibold text-gray-700 mb-1.5">你的名稱</label>
           <input
@@ -67,7 +74,7 @@
           :disabled="submitting"
           @click="submitAvailability"
         >
-          {{ submitting ? '送出中…' : '送出我的時間' }}
+          {{ submitting ? '送出中…' : myParticipantId != null ? '更新我的時間' : '送出我的時間' }}
         </button>
       </div>
 
@@ -109,6 +116,7 @@ import { useSelectionStore } from '../stores/selection'
 import { api } from '../api'
 import { timezoneLabel } from '../utils/timezone'
 import { SLOT_MINUTES, minutesToHHmm } from '../utils/time'
+import { getStoredParticipant, storeParticipant, clearStoredParticipant } from '../utils/identity'
 
 const props = defineProps({ id: { type: String, required: true } })
 
@@ -123,6 +131,8 @@ const participantName = ref('')
 const submitting = ref(false)
 const submitError = ref('')
 const copied = ref(false)
+const myParticipantId = ref(null)
+const myEditToken = ref(null)
 
 // dayValueTHH:mm -> option id
 let optionByKey = new Map()
@@ -198,13 +208,36 @@ function heatmapLabel(key) {
   return String(votesFor(key))
 }
 
+function applyStoredIdentity() {
+  const stored = getStoredParticipant(props.id)
+  const mine = stored && event.value.participants.find((p) => p.id === stored.id)
+  if (mine) {
+    myParticipantId.value = mine.id
+    myEditToken.value = stored.editToken
+    participantName.value = mine.name
+    selection.reset(mine.available_option_ids.map(String))
+  } else {
+    myParticipantId.value = null
+    myEditToken.value = null
+    selection.reset()
+  }
+}
+
+function forgetIdentity() {
+  clearStoredParticipant(props.id)
+  myParticipantId.value = null
+  myEditToken.value = null
+  participantName.value = ''
+  selection.reset()
+}
+
 async function loadEvent() {
   loading.value = true
   loadError.value = ''
   try {
     event.value = await api.getEvent(props.id)
     buildGrid()
-    selection.reset()
+    applyStoredIdentity()
   } catch (err) {
     loadError.value = err.message || '找不到這個活動'
     selection.reset()
@@ -225,10 +258,19 @@ async function submitAvailability() {
   }
   submitting.value = true
   try {
-    await api.addParticipant(props.id, {
+    const payload = {
       name: participantName.value.trim(),
       available_option_ids: selection.selectedArray.map(Number),
-    })
+    }
+    if (myParticipantId.value != null) {
+      await api.updateParticipant(props.id, myParticipantId.value, {
+        ...payload,
+        edit_token: myEditToken.value,
+      })
+    } else {
+      const resp = await api.addParticipant(props.id, payload)
+      storeParticipant(props.id, resp.id, resp.edit_token)
+    }
     await loadEvent()
     viewMode.value = 'heatmap'
   } catch (err) {

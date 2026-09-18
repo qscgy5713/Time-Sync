@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -32,6 +34,37 @@ func dedupeInt64(ids []int64) []int64 {
 
 func New(pool *pgxpool.Pool, publicURL string) *Handler {
 	return &Handler{Pool: pool, PublicURL: publicURL}
+}
+
+// validOptionIDs reports whether every id in optionIDs belongs to eventID.
+func validOptionIDs(ctx context.Context, tx pgx.Tx, eventID string, optionIDs []int64) (bool, error) {
+	var validCount int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM event_options WHERE event_id = $1 AND id = ANY($2)`,
+		eventID, optionIDs,
+	).Scan(&validCount); err != nil {
+		return false, err
+	}
+	return validCount == len(optionIDs), nil
+}
+
+// insertAvailabilities writes one row per optionID for participantID.
+func insertAvailabilities(ctx context.Context, tx pgx.Tx, participantID int64, optionIDs []int64) error {
+	batch := &pgx.Batch{}
+	for _, optID := range optionIDs {
+		batch.Queue(
+			`INSERT INTO availabilities (participant_id, event_option_id) VALUES ($1, $2)`,
+			participantID, optID,
+		)
+	}
+	br := tx.SendBatch(ctx, batch)
+	for range optionIDs {
+		if _, err := br.Exec(); err != nil {
+			br.Close()
+			return err
+		}
+	}
+	return br.Close()
 }
 
 func (h *Handler) CreateEvent(c *gin.Context) {
@@ -211,44 +244,27 @@ func (h *Handler) AddParticipant(c *gin.Context) {
 		return
 	}
 
-	var validCount int
-	if err := tx.QueryRow(ctx,
-		`SELECT count(*) FROM event_options WHERE event_id = $1 AND id = ANY($2)`,
-		eventID, req.AvailableOptionIDs,
-	).Scan(&validCount); err != nil {
+	ok, err := validOptionIDs(ctx, tx, eventID, req.AvailableOptionIDs)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
 		return
 	}
-	if validCount != len(req.AvailableOptionIDs) {
+	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "one or more available_option_ids do not belong to this event"})
 		return
 	}
 
+	editToken := uuid.New().String()
 	var participantID int64
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO participants (event_id, name) VALUES ($1, $2) RETURNING id`,
-		eventID, req.Name,
+		`INSERT INTO participants (event_id, name, edit_token) VALUES ($1, $2, $3) RETURNING id`,
+		eventID, req.Name, editToken,
 	).Scan(&participantID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create participant"})
 		return
 	}
 
-	batch := &pgx.Batch{}
-	for _, optID := range req.AvailableOptionIDs {
-		batch.Queue(
-			`INSERT INTO availabilities (participant_id, event_option_id) VALUES ($1, $2)`,
-			participantID, optID,
-		)
-	}
-	br := tx.SendBatch(ctx, batch)
-	for range req.AvailableOptionIDs {
-		if _, err := br.Exec(); err != nil {
-			br.Close()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save availabilities"})
-			return
-		}
-	}
-	if err := br.Close(); err != nil {
+	if err := insertAvailabilities(ctx, tx, participantID, req.AvailableOptionIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save availabilities"})
 		return
 	}
@@ -258,5 +274,81 @@ func (h *Handler) AddParticipant(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, models.AddParticipantResponse{ID: participantID})
+	c.JSON(http.StatusCreated, models.AddParticipantResponse{ID: participantID, EditToken: editToken})
+}
+
+func (h *Handler) UpdateParticipant(c *gin.Context) {
+	eventID := c.Param("id")
+	if _, err := uuid.Parse(eventID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid event id"})
+		return
+	}
+	participantID, err := strconv.ParseInt(c.Param("participantId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid participant id"})
+		return
+	}
+
+	var req models.UpdateParticipantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.AvailableOptionIDs = dedupeInt64(req.AvailableOptionIDs)
+
+	ctx := c.Request.Context()
+	tx, err := h.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var storedToken string
+	err = tx.QueryRow(ctx,
+		`SELECT edit_token FROM participants WHERE id = $1 AND event_id = $2`,
+		participantID, eventID,
+	).Scan(&storedToken)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "participant not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	if storedToken != req.EditToken {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invalid edit token"})
+		return
+	}
+
+	ok, err := validOptionIDs(ctx, tx, eventID, req.AvailableOptionIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "one or more available_option_ids do not belong to this event"})
+		return
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE participants SET name = $1 WHERE id = $2`, req.Name, participantID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update participant"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM availabilities WHERE participant_id = $1`, participantID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update availabilities"})
+		return
+	}
+	if err := insertAvailabilities(ctx, tx, participantID, req.AvailableOptionIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save availabilities"})
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save participant"})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.AddParticipantResponse{ID: participantID})
 }

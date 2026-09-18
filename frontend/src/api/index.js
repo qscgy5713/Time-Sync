@@ -22,4 +22,10 @@ export const api = {
   addParticipant(id, payload) {
     return request(`/api/events/${id}/participants`, { method: 'POST', body: JSON.stringify(payload) })
   },
+  updateParticipant(id, participantId, payload) {
+    return request(`/api/events/${id}/participants/${participantId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+  },
 }

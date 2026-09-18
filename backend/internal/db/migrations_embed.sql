@@ -19,8 +19,11 @@ CREATE TABLE IF NOT EXISTS participants (
     id BIGSERIAL PRIMARY KEY,
     event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
     name VARCHAR(50) NOT NULL,
+    edit_token UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE participants ADD COLUMN IF NOT EXISTS edit_token UUID;
 
 CREATE INDEX IF NOT EXISTS idx_participants_event_id ON participants(event_id);
 

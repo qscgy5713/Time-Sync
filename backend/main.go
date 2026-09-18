@@ -42,7 +42,7 @@ func main() {
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{allowedOrigin},
-		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type"},
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
@@ -57,6 +57,7 @@ func main() {
 		api.POST("/events", h.CreateEvent)
 		api.GET("/events/:id", h.GetEvent)
 		api.POST("/events/:id/participants", h.AddParticipant)
+		api.PUT("/events/:id/participants/:participantId", h.UpdateParticipant)
 	}
 
 	log.Printf("listening on :%s", port)

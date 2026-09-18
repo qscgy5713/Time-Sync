@@ -47,5 +47,12 @@ type AddParticipantRequest struct {
 }
 
 type AddParticipantResponse struct {
-	ID int64 `json:"id"`
+	ID        int64  `json:"id"`
+	EditToken string `json:"edit_token"`
+}
+
+type UpdateParticipantRequest struct {
+	Name               string  `json:"name" binding:"required,max=50"`
+	AvailableOptionIDs []int64 `json:"available_option_ids" binding:"required,min=1,max=2000"`
+	EditToken          string  `json:"edit_token" binding:"required,uuid"`
 }
