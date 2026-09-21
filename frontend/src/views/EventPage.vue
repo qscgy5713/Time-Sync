@@ -279,13 +279,19 @@ const finalizedOption = computed(() => {
 
 const finalizeOptions = computed(() => {
   if (!event.value) return []
-  return event.value.options.map((opt) => {
-    const local = DateTime.fromISO(opt.start_datetime, { zone: 'utc' }).setZone(localZone)
-    return {
-      value: opt.id,
-      label: `${local.toFormat('LL/dd (ccc) HH:mm')} · ${votesFor(opt.id)} 人有空`,
-    }
-  })
+  // Most-voted first; options arrive sorted by start time, and Array.sort is
+  // stable, so ties stay earliest-first (same tie-break as the auto-pick).
+  return event.value.options
+    .map((opt) => {
+      const local = DateTime.fromISO(opt.start_datetime, { zone: 'utc' }).setZone(localZone)
+      const votes = votesFor(opt.id)
+      return {
+        value: opt.id,
+        votes,
+        label: `${local.toFormat('LL/dd (ccc) HH:mm')} · ${votes} 人有空`,
+      }
+    })
+    .sort((a, b) => b.votes - a.votes)
 })
 
 async function finalizeSelected() {
