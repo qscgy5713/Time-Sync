@@ -54,6 +54,7 @@ func main() {
 
 	api := r.Group("/api")
 	{
+		api.GET("/stats", h.GetStats)
 		api.POST("/events", h.CreateEvent)
 		api.GET("/events/:id", h.GetEvent)
 		api.POST("/events/:id/participants", h.AddParticipant)

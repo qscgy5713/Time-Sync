@@ -67,6 +67,22 @@ func insertAvailabilities(ctx context.Context, tx pgx.Tx, participantID int64, o
 	return br.Close()
 }
 
+func (h *Handler) GetStats(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var resp models.StatsResponse
+	if err := h.Pool.QueryRow(ctx, `SELECT count(*) FROM events`).Scan(&resp.TotalEvents); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	if err := h.Pool.QueryRow(ctx, `SELECT count(*) FROM participants`).Scan(&resp.TotalParticipants); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *Handler) CreateEvent(c *gin.Context) {
 	var req models.CreateEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

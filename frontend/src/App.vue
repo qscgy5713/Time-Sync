@@ -14,8 +14,24 @@
       </div>
     </header>
     <router-view />
-    <footer class="max-w-3xl mx-auto px-6 py-10 text-center text-xs text-gray-400">
-      免登入．免註冊．時間對齊就這麼簡單
+    <footer class="max-w-3xl mx-auto px-6 py-10 text-center text-xs text-gray-400 space-y-1">
+      <p>免登入．免註冊．時間對齊就這麼簡單</p>
+      <p v-if="stats">累積 {{ stats.total_events }} 個活動．{{ stats.total_participants }} 人次填寫</p>
     </footer>
   </div>
 </template>
+
+<script setup>
+import { onMounted, ref } from 'vue'
+import { api } from './api'
+
+const stats = ref(null)
+
+onMounted(async () => {
+  try {
+    stats.value = await api.getStats()
+  } catch {
+    // stats are a non-essential footer nicety; fail silently
+  }
+})
+</script>

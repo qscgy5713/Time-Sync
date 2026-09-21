@@ -16,6 +16,9 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  getStats() {
+    return request('/api/stats')
+  },
   createEvent(payload) {
     return request('/api/events', { method: 'POST', body: JSON.stringify(payload) })
   },

@@ -56,3 +56,8 @@ type UpdateParticipantRequest struct {
 	AvailableOptionIDs []int64 `json:"available_option_ids" binding:"required,min=1,max=2000"`
 	EditToken          string  `json:"edit_token" binding:"required,uuid"`
 }
+
+type StatsResponse struct {
+	TotalEvents       int64 `json:"total_events"`
+	TotalParticipants int64 `json:"total_participants"`
+}
