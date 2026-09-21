@@ -8,9 +8,11 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 
 	"time-sync/backend/internal/db"
 	"time-sync/backend/internal/handlers"
+	"time-sync/backend/internal/middleware"
 )
 
 func getenv(key, fallback string) string {
@@ -40,6 +42,12 @@ func main() {
 	h := handlers.New(pool, publicURL)
 
 	r := gin.Default()
+	// Only the reverse proxy (Caddy, on the private compose network) ever
+	// connects directly to this process, so its X-Forwarded-For can be
+	// trusted to carry the real client IP for rate limiting.
+	if err := r.SetTrustedProxies([]string{"172.16.0.0/12"}); err != nil {
+		log.Fatalf("failed to set trusted proxies: %v", err)
+	}
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{allowedOrigin},
 		AllowMethods:     []string{"GET", "POST", "PUT", "OPTIONS"},
@@ -52,7 +60,10 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
+	limiter := middleware.NewRateLimiter(rate.Every(2*time.Second), 15)
+
 	api := r.Group("/api")
+	api.Use(limiter.Middleware())
 	{
 		api.GET("/stats", h.GetStats)
 		api.POST("/events", h.CreateEvent)
