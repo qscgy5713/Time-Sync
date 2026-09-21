@@ -19,5 +19,9 @@ jobs:
             cd ~/Time-Sync
             git fetch origin master
             git reset --hard origin/master
-            docker compose -f docker-compose.prod.yml up -d --build
+            # Only rebuild the frontend here: the backend Go build is heavy
+            # on this VM's limited RAM and is rebuilt manually (cross-compiled
+            # elsewhere and `docker load`ed) when its code actually changes.
+            docker compose -f docker-compose.prod.yml build frontend
+            docker compose -f docker-compose.prod.yml up -d
             docker image prune -f
