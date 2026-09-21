@@ -70,6 +70,7 @@ func main() {
 		api.GET("/events/:id", h.GetEvent)
 		api.POST("/events/:id/participants", h.AddParticipant)
 		api.PUT("/events/:id/participants/:participantId", h.UpdateParticipant)
+		api.PUT("/events/:id/finalize", h.FinalizeEvent)
 	}
 
 	log.Printf("listening on :%s", port)

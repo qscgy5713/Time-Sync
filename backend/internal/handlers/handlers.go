@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"net/http"
 	"strconv"
@@ -46,6 +47,20 @@ func validOptionIDs(ctx context.Context, tx pgx.Tx, eventID string, optionIDs []
 		return false, err
 	}
 	return validCount == len(optionIDs), nil
+}
+
+// eventFinalized reports whether eventID has a finalized_option_id set,
+// i.e. voting is closed.
+func eventFinalized(ctx context.Context, tx pgx.Tx, eventID string) (bool, error) {
+	var finalized bool
+	err := tx.QueryRow(ctx,
+		`SELECT finalized_option_id IS NOT NULL FROM events WHERE id = $1`,
+		eventID,
+	).Scan(&finalized)
+	if err != nil {
+		return false, err
+	}
+	return finalized, nil
 }
 
 // insertAvailabilities writes one row per optionID for participantID.
@@ -105,9 +120,10 @@ func (h *Handler) CreateEvent(c *gin.Context) {
 	defer tx.Rollback(ctx)
 
 	id := uuid.New().String()
+	ownerToken := uuid.New().String()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO events (id, title, description, timezone) VALUES ($1, $2, $3, $4)`,
-		id, req.Title, req.Description, req.Timezone,
+		`INSERT INTO events (id, title, description, timezone, owner_token) VALUES ($1, $2, $3, $4, $5)`,
+		id, req.Title, req.Description, req.Timezone, ownerToken,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create event"})
@@ -140,8 +156,9 @@ func (h *Handler) CreateEvent(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, models.CreateEventResponse{
-		ID:  id,
-		URL: h.PublicURL + "/event/" + id,
+		ID:         id,
+		URL:        h.PublicURL + "/event/" + id,
+		OwnerToken: ownerToken,
 	})
 }
 
@@ -157,9 +174,9 @@ func (h *Handler) GetEvent(c *gin.Context) {
 	var resp models.EventDetailResponse
 	var description *string
 	err := h.Pool.QueryRow(ctx,
-		`SELECT id, title, description, timezone, created_at FROM events WHERE id = $1`,
+		`SELECT id, title, description, timezone, created_at, finalized_option_id FROM events WHERE id = $1`,
 		eventID,
-	).Scan(&resp.ID, &resp.Title, &description, &resp.Timezone, &resp.CreatedAt)
+	).Scan(&resp.ID, &resp.Title, &description, &resp.Timezone, &resp.CreatedAt, &resp.FinalizedOptionID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "event not found"})
@@ -260,6 +277,16 @@ func (h *Handler) AddParticipant(c *gin.Context) {
 		return
 	}
 
+	finalized, err := eventFinalized(ctx, tx, eventID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	if finalized {
+		c.JSON(http.StatusConflict, gin.H{"error": "this event's time has been finalized; voting is closed"})
+		return
+	}
+
 	ok, err := validOptionIDs(ctx, tx, eventID, req.AvailableOptionIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
@@ -338,6 +365,16 @@ func (h *Handler) UpdateParticipant(c *gin.Context) {
 		return
 	}
 
+	finalized, err := eventFinalized(ctx, tx, eventID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	if finalized {
+		c.JSON(http.StatusConflict, gin.H{"error": "this event's time has been finalized; voting is closed"})
+		return
+	}
+
 	ok, err := validOptionIDs(ctx, tx, eventID, req.AvailableOptionIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
@@ -367,4 +404,73 @@ func (h *Handler) UpdateParticipant(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.AddParticipantResponse{ID: participantID})
+}
+
+// FinalizeEvent sets (or, with a null option_id, clears) the event's chosen
+// time. Only the organizer may do this: the request must carry the
+// owner_token issued once at event creation.
+func (h *Handler) FinalizeEvent(c *gin.Context) {
+	eventID := c.Param("id")
+	if _, err := uuid.Parse(eventID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid event id"})
+		return
+	}
+
+	var req models.FinalizeEventRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+	tx, err := h.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var storedOwnerToken *string
+	err = tx.QueryRow(ctx, `SELECT owner_token::text FROM events WHERE id = $1`, eventID).Scan(&storedOwnerToken)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "event not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+	if storedOwnerToken == nil || subtle.ConstantTimeCompare([]byte(*storedOwnerToken), []byte(req.OwnerToken)) != 1 {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only the event organizer can finalize"})
+		return
+	}
+
+	if req.OptionID != nil {
+		ok, err := validOptionIDs(ctx, tx, eventID, []int64{*req.OptionID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "option_id does not belong to this event"})
+			return
+		}
+	}
+
+	tag, err := tx.Exec(ctx, `UPDATE events SET finalized_option_id = $1 WHERE id = $2`, req.OptionID, eventID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update event"})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "event not found"})
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save event"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }

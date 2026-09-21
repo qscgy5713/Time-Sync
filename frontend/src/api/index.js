@@ -34,4 +34,10 @@ export const api = {
       body: JSON.stringify(payload),
     })
   },
+  finalizeEvent(id, optionId, ownerToken) {
+    return request(`/api/events/${id}/finalize`, {
+      method: 'PUT',
+      body: JSON.stringify({ option_id: optionId, owner_token: ownerToken }),
+    })
+  },
 }

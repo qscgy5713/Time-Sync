@@ -94,6 +94,7 @@ import { api } from '../api'
 import { TIMEZONE_OPTIONS } from '../utils/timezone'
 import { SLOT_MINUTES, minutesToHHmm } from '../utils/time'
 import { recordMyEvent } from '../utils/myEvents'
+import { storeOwnerToken } from '../utils/identity'
 
 const router = useRouter()
 const selection = useSelectionStore()
@@ -202,6 +203,7 @@ async function submit() {
       timezone: form.timezone,
       options,
     })
+    storeOwnerToken(resp.id, resp.owner_token)
     recordMyEvent(resp.id, form.title, 'organizer')
     router.push(`/event/${resp.id}`)
   } catch (err) {

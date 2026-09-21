@@ -13,6 +13,13 @@ CREATE TABLE IF NOT EXISTS event_options (
     end_datetime TIMESTAMPTZ NOT NULL
 );
 
+-- Nullable: once set, the event is locked to this slot and voting closes.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS finalized_option_id BIGINT REFERENCES event_options(id);
+
+-- Secret held only by the organizer's browser; required to finalize/unfinalize.
+-- NULL for events created before this existed (they can never be finalized).
+ALTER TABLE events ADD COLUMN IF NOT EXISTS owner_token UUID;
+
 CREATE INDEX IF NOT EXISTS idx_event_options_event_id ON event_options(event_id);
 
 CREATE TABLE IF NOT EXISTS participants (

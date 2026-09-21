@@ -26,3 +26,25 @@ export function clearStoredParticipant(eventId) {
     // ignore
   }
 }
+
+function ownerKey(eventId) {
+  return `timesync:owner:${eventId}`
+}
+
+// The organizer's secret for an event; only the browser that created the
+// event holds it, and it is required to finalize/unfinalize.
+export function getOwnerToken(eventId) {
+  try {
+    return localStorage.getItem(ownerKey(eventId))
+  } catch {
+    return null
+  }
+}
+
+export function storeOwnerToken(eventId, token) {
+  try {
+    localStorage.setItem(ownerKey(eventId), token)
+  } catch {
+    // localStorage unavailable; silently ignore
+  }
+}

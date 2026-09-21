@@ -8,15 +8,16 @@ type EventOptionInput struct {
 }
 
 type CreateEventRequest struct {
-	Title       string              `json:"title" binding:"required,max=100"`
-	Description string              `json:"description"`
-	Timezone    string              `json:"timezone" binding:"required"`
-	Options     []EventOptionInput  `json:"options" binding:"required,min=1,max=2000,dive"`
+	Title       string             `json:"title" binding:"required,max=100"`
+	Description string             `json:"description"`
+	Timezone    string             `json:"timezone" binding:"required"`
+	Options     []EventOptionInput `json:"options" binding:"required,min=1,max=2000,dive"`
 }
 
 type CreateEventResponse struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	ID         string `json:"id"`
+	URL        string `json:"url"`
+	OwnerToken string `json:"owner_token"`
 }
 
 type EventOption struct {
@@ -32,13 +33,19 @@ type ParticipantSummary struct {
 }
 
 type EventDetailResponse struct {
-	ID           string               `json:"id"`
-	Title        string               `json:"title"`
-	Description  string               `json:"description"`
-	Timezone     string               `json:"timezone"`
-	CreatedAt    time.Time            `json:"created_at"`
-	Options      []EventOption        `json:"options"`
-	Participants []ParticipantSummary `json:"participants"`
+	ID                string               `json:"id"`
+	Title             string               `json:"title"`
+	Description       string               `json:"description"`
+	Timezone          string               `json:"timezone"`
+	CreatedAt         time.Time            `json:"created_at"`
+	Options           []EventOption        `json:"options"`
+	Participants      []ParticipantSummary `json:"participants"`
+	FinalizedOptionID *int64               `json:"finalized_option_id"`
+}
+
+type FinalizeEventRequest struct {
+	OptionID   *int64 `json:"option_id"`
+	OwnerToken string `json:"owner_token" binding:"required,uuid"`
 }
 
 type AddParticipantRequest struct {
