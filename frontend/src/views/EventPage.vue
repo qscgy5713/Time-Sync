@@ -117,6 +117,7 @@ import { api } from '../api'
 import { timezoneLabel } from '../utils/timezone'
 import { SLOT_MINUTES, minutesToHHmm } from '../utils/time'
 import { getStoredParticipant, storeParticipant, clearStoredParticipant } from '../utils/identity'
+import { recordMyEvent } from '../utils/myEvents'
 
 const props = defineProps({ id: { type: String, required: true } })
 
@@ -271,6 +272,7 @@ async function submitAvailability() {
       const resp = await api.addParticipant(props.id, payload)
       storeParticipant(props.id, resp.id, resp.edit_token)
     }
+    recordMyEvent(props.id, event.value.title, 'participant')
     await loadEvent()
     viewMode.value = 'heatmap'
   } catch (err) {

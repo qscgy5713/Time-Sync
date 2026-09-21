@@ -93,6 +93,7 @@ import { useSelectionStore } from '../stores/selection'
 import { api } from '../api'
 import { TIMEZONE_OPTIONS } from '../utils/timezone'
 import { SLOT_MINUTES, minutesToHHmm } from '../utils/time'
+import { recordMyEvent } from '../utils/myEvents'
 
 const router = useRouter()
 const selection = useSelectionStore()
@@ -201,6 +202,7 @@ async function submit() {
       timezone: form.timezone,
       options,
     })
+    recordMyEvent(resp.id, form.title, 'organizer')
     router.push(`/event/${resp.id}`)
   } catch (err) {
     errorMessage.value = err.message || '建立活動失敗，請稍後再試'
