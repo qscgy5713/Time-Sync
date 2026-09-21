@@ -12,6 +12,8 @@ type CreateEventRequest struct {
 	Description string             `json:"description"`
 	Timezone    string             `json:"timezone" binding:"required"`
 	Options     []EventOptionInput `json:"options" binding:"required,min=1,max=2000,dive"`
+	// Optional: when set, voting closes at this instant.
+	VotingDeadline *time.Time `json:"voting_deadline"`
 }
 
 type CreateEventResponse struct {
@@ -41,6 +43,10 @@ type EventDetailResponse struct {
 	Options           []EventOption        `json:"options"`
 	Participants      []ParticipantSummary `json:"participants"`
 	FinalizedOptionID *int64               `json:"finalized_option_id"`
+	VotingDeadline    *time.Time           `json:"voting_deadline"`
+	VotingClosed      bool                 `json:"voting_closed"`
+	// True when the result was picked automatically at the deadline.
+	FinalizedByDeadline bool `json:"finalized_by_deadline"`
 }
 
 type FinalizeEventRequest struct {

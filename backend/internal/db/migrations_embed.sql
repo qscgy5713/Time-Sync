@@ -39,3 +39,11 @@ CREATE TABLE IF NOT EXISTS availabilities (
     event_option_id BIGINT NOT NULL REFERENCES event_options(id) ON DELETE CASCADE,
     PRIMARY KEY (participant_id, event_option_id)
 );
+
+-- Optional voting deadline. Once it passes, voting is closed; if nobody has
+-- finalized a time by then, the most-voted option is picked automatically
+-- (once: deadline_processed stops it from re-applying after the organizer
+-- changes or clears the result).
+ALTER TABLE events ADD COLUMN IF NOT EXISTS voting_deadline TIMESTAMPTZ;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS deadline_processed BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS finalized_by_deadline BOOLEAN NOT NULL DEFAULT false;

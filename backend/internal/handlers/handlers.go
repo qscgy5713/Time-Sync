@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -49,18 +50,47 @@ func validOptionIDs(ctx context.Context, tx pgx.Tx, eventID string, optionIDs []
 	return validCount == len(optionIDs), nil
 }
 
-// eventFinalized reports whether eventID has a finalized_option_id set,
-// i.e. voting is closed.
-func eventFinalized(ctx context.Context, tx pgx.Tx, eventID string) (bool, error) {
-	var finalized bool
+// votingClosed reports whether voting on eventID is closed: either a final
+// time was chosen or the voting deadline has passed.
+func votingClosed(ctx context.Context, tx pgx.Tx, eventID string) (bool, error) {
+	var closed bool
 	err := tx.QueryRow(ctx,
-		`SELECT finalized_option_id IS NOT NULL FROM events WHERE id = $1`,
+		`SELECT finalized_option_id IS NOT NULL OR (voting_deadline IS NOT NULL AND voting_deadline <= now())
+		 FROM events WHERE id = $1`,
 		eventID,
-	).Scan(&finalized)
+	).Scan(&closed)
 	if err != nil {
 		return false, err
 	}
-	return finalized, nil
+	return closed, nil
+}
+
+// applyDeadline finalizes the most-voted option (ties: earliest start) if the
+// deadline has passed and nothing was finalized yet. It runs at most once per
+// event, so a later change by the organizer is never overwritten.
+func applyDeadline(ctx context.Context, pool *pgxpool.Pool, eventID string) error {
+	_, err := pool.Exec(ctx, `
+		UPDATE events e SET
+			finalized_option_id = best.id,
+			finalized_by_deadline = true,
+			deadline_processed = true
+		FROM (
+			SELECT o.id
+			FROM event_options o
+			JOIN availabilities a ON a.event_option_id = o.id
+			WHERE o.event_id = $1
+			GROUP BY o.id, o.start_datetime
+			ORDER BY count(*) DESC, o.start_datetime ASC
+			LIMIT 1
+		) best
+		WHERE e.id = $1
+		  AND e.voting_deadline IS NOT NULL
+		  AND e.voting_deadline <= now()
+		  AND NOT e.deadline_processed
+		  AND e.finalized_option_id IS NULL`,
+		eventID,
+	)
+	return err
 }
 
 // insertAvailabilities writes one row per optionID for participantID.
@@ -111,6 +141,11 @@ func (h *Handler) CreateEvent(c *gin.Context) {
 		}
 	}
 
+	if req.VotingDeadline != nil && !req.VotingDeadline.After(time.Now()) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "voting_deadline must be in the future"})
+		return
+	}
+
 	ctx := c.Request.Context()
 	tx, err := h.Pool.Begin(ctx)
 	if err != nil {
@@ -122,8 +157,8 @@ func (h *Handler) CreateEvent(c *gin.Context) {
 	id := uuid.New().String()
 	ownerToken := uuid.New().String()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO events (id, title, description, timezone, owner_token) VALUES ($1, $2, $3, $4, $5)`,
-		id, req.Title, req.Description, req.Timezone, ownerToken,
+		`INSERT INTO events (id, title, description, timezone, owner_token, voting_deadline) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, req.Title, req.Description, req.Timezone, ownerToken, req.VotingDeadline,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create event"})
@@ -171,12 +206,21 @@ func (h *Handler) GetEvent(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
+	if err := applyDeadline(ctx, h.Pool, eventID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+		return
+	}
+
 	var resp models.EventDetailResponse
 	var description *string
 	err := h.Pool.QueryRow(ctx,
-		`SELECT id, title, description, timezone, created_at, finalized_option_id FROM events WHERE id = $1`,
+		`SELECT id, title, description, timezone, created_at, finalized_option_id, voting_deadline,
+		        finalized_option_id IS NOT NULL OR (voting_deadline IS NOT NULL AND voting_deadline <= now()),
+		        finalized_by_deadline
+		 FROM events WHERE id = $1`,
 		eventID,
-	).Scan(&resp.ID, &resp.Title, &description, &resp.Timezone, &resp.CreatedAt, &resp.FinalizedOptionID)
+	).Scan(&resp.ID, &resp.Title, &description, &resp.Timezone, &resp.CreatedAt, &resp.FinalizedOptionID,
+		&resp.VotingDeadline, &resp.VotingClosed, &resp.FinalizedByDeadline)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "event not found"})
@@ -277,13 +321,13 @@ func (h *Handler) AddParticipant(c *gin.Context) {
 		return
 	}
 
-	finalized, err := eventFinalized(ctx, tx, eventID)
+	finalized, err := votingClosed(ctx, tx, eventID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
 		return
 	}
 	if finalized {
-		c.JSON(http.StatusConflict, gin.H{"error": "this event's time has been finalized; voting is closed"})
+		c.JSON(http.StatusConflict, gin.H{"error": "voting is closed (a final time was chosen or the deadline passed)"})
 		return
 	}
 
@@ -365,13 +409,13 @@ func (h *Handler) UpdateParticipant(c *gin.Context) {
 		return
 	}
 
-	finalized, err := eventFinalized(ctx, tx, eventID)
+	finalized, err := votingClosed(ctx, tx, eventID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
 		return
 	}
 	if finalized {
-		c.JSON(http.StatusConflict, gin.H{"error": "this event's time has been finalized; voting is closed"})
+		c.JSON(http.StatusConflict, gin.H{"error": "voting is closed (a final time was chosen or the deadline passed)"})
 		return
 	}
 
@@ -457,7 +501,7 @@ func (h *Handler) FinalizeEvent(c *gin.Context) {
 		}
 	}
 
-	tag, err := tx.Exec(ctx, `UPDATE events SET finalized_option_id = $1 WHERE id = $2`, req.OptionID, eventID)
+	tag, err := tx.Exec(ctx, `UPDATE events SET finalized_option_id = $1, finalized_by_deadline = false, deadline_processed = true WHERE id = $2`, req.OptionID, eventID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update event"})
 		return

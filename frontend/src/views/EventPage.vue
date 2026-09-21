@@ -31,7 +31,10 @@
             <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8" />
             <path d="M8 12.5l2.5 2.5 5.5-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
-          <span class="text-sm font-semibold">已確定時間：{{ finalizedOption.label }}</span>
+          <span class="text-sm font-semibold">
+            已確定時間：{{ finalizedOption.label }}
+            <span v-if="event.finalized_by_deadline" class="ml-1 text-xs font-normal">（截止後依最高票自動選定）</span>
+          </span>
         </div>
         <button
           v-if="isOwner"
@@ -44,11 +47,17 @@
         </button>
       </div>
 
+      <div v-if="!finalizedOption && event.voting_deadline" class="mb-6 rounded-xl border px-4 py-3 text-sm"
+        :class="votingClosed ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-brand-50 border-brand-100 text-brand-700'">
+        <template v-if="votingClosed">投票已於 {{ deadlineLabel }} 截止{{ event.participants.length ? '' : '，且沒有人投票' }}。</template>
+        <template v-else>投票截止時間：{{ deadlineLabel }}（到時若沒人鎖定，會自動選出最高票的時段）</template>
+      </div>
+
       <div class="inline-flex p-1 mb-6 rounded-xl bg-gray-100/80 gap-1">
         <button
           class="px-4 py-1.5 text-sm font-semibold rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
           :class="viewMode === 'fill' ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'"
-          :disabled="!!finalizedOption"
+          :disabled="votingClosed"
           @click="viewMode = 'fill'"
         >
           填寫我的空檔
@@ -254,6 +263,12 @@ function heatmapLabel(key) {
   return String(votesFor(key))
 }
 
+const votingClosed = computed(() => !!event.value?.voting_closed)
+const deadlineLabel = computed(() => {
+  if (!event.value?.voting_deadline) return ''
+  return DateTime.fromISO(event.value.voting_deadline).setZone(localZone).toFormat('yyyy/LL/dd (ccc) HH:mm')
+})
+
 const finalizedOption = computed(() => {
   if (!event.value?.finalized_option_id) return null
   const opt = event.value.options.find((o) => o.id === event.value.finalized_option_id)
@@ -331,7 +346,7 @@ async function loadEvent() {
     event.value = await api.getEvent(props.id)
     buildGrid()
     applyStoredIdentity()
-    if (event.value.finalized_option_id != null) {
+    if (event.value.voting_closed) {
       viewMode.value = 'heatmap'
     }
   } catch (err) {
@@ -344,8 +359,8 @@ async function loadEvent() {
 
 async function submitAvailability() {
   submitError.value = ''
-  if (finalizedOption.value) {
-    submitError.value = '此活動已鎖定最終時間，無法再修改'
+  if (votingClosed.value) {
+    submitError.value = '此活動已截止或已鎖定最終時間，無法再修改'
     return
   }
   if (!participantName.value.trim()) {
@@ -375,8 +390,8 @@ async function submitAvailability() {
     await loadEvent()
     viewMode.value = 'heatmap'
   } catch (err) {
-    if (err.message && err.message.includes('finalized')) {
-      submitError.value = '此活動已鎖定最終時間，無法再修改'
+    if (err.message && err.message.includes('voting is closed')) {
+      submitError.value = '此活動已截止或已鎖定最終時間，無法再修改'
       await loadEvent()
     } else {
       submitError.value = err.message || '送出失敗，請稍後再試'

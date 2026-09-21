@@ -55,6 +55,28 @@
       </div>
 
       <div class="border-t border-gray-100 pt-6">
+        <div class="flex items-baseline justify-between mb-1.5">
+          <label class="block text-sm font-semibold text-gray-700">最後投票時間（選填）</label>
+          <button
+            v-if="form.deadlineDate"
+            type="button"
+            class="text-xs text-gray-400 hover:text-red-500 transition"
+            @click="form.deadlineDate = ''"
+          >
+            清除
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mb-3">
+          到時間後大家就不能再投票；如果那時還沒有人鎖定時間，系統會自動選出最高票的時段（發起人之後仍可改選）。
+        </p>
+        <div class="grid grid-cols-2 gap-4">
+          <DatePicker v-model="form.deadlineDate" :min="today.toISODate()" />
+          <CustomSelect v-model="form.deadlineHour" :options="deadlineHourOptions" />
+        </div>
+        <p v-if="deadlineError" class="mt-2 text-xs text-red-600">{{ deadlineError }}</p>
+      </div>
+
+      <div class="border-t border-gray-100 pt-6">
         <div class="flex items-baseline justify-between mb-3">
           <label class="block text-sm font-semibold text-gray-700">圈選候選時段</label>
           <span class="text-xs text-gray-400">已選 <span class="font-semibold text-brand-600">{{ selection.count }}</span> 個時段 · 拖曳滑鼠可連續選取</span>
@@ -116,13 +138,28 @@ const form = reactive({
   endDate: today.plus({ days: 6 }).toISODate(),
   startHour: 9,
   endHour: 18,
+  deadlineDate: '',
+  deadlineHour: 18,
 })
 
 function hourLabel(h) {
   return `${String(h).padStart(2, '0')}:00`
 }
 const startHourOptions = Array.from({ length: 24 }, (_, h) => ({ value: h, label: hourLabel(h) }))
+const deadlineHourOptions = Array.from({ length: 24 }, (_, h) => ({ value: h, label: hourLabel(h) }))
 const endHourOptions = Array.from({ length: 24 }, (_, h) => ({ value: h + 1, label: hourLabel(h + 1) }))
+
+const deadlineInstant = computed(() => {
+  if (!form.deadlineDate) return null
+  return DateTime.fromISO(form.deadlineDate, { zone: form.timezone }).set({ hour: form.deadlineHour })
+})
+const deadlineError = computed(() => {
+  const d = deadlineInstant.value
+  if (!d) return ''
+  if (!d.isValid) return '最後投票時間在所選時區不存在，請換一個時間'
+  if (d <= DateTime.now()) return '最後投票時間必須晚於現在'
+  return ''
+})
 
 const errorMessage = ref('')
 const submitting = ref(false)
@@ -179,6 +216,8 @@ async function submit() {
     return
   }
 
+  if (deadlineError.value) return
+
   const starts = selection.selectedArray.map((key) =>
     DateTime.fromFormat(key, "yyyy-LL-dd'T'HH:mm", { zone: form.timezone }),
   )
@@ -201,6 +240,7 @@ async function submit() {
       title: form.title,
       description: form.description,
       timezone: form.timezone,
+      voting_deadline: deadlineInstant.value ? deadlineInstant.value.toUTC().toISO() : null,
       options,
     })
     storeOwnerToken(resp.id, resp.owner_token)
